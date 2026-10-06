@@ -1,0 +1,14 @@
+resources:
+  pipelines:
+    maven_market_etl_pipeline:
+      name: maven_market_etl_pipeline_${bundle.target}
+      catalog: maven_market
+      target: bronze
+      development: true
+
+      libraries:
+        - notebook:
+            path: ../src/maven_market_etl/01_bronze_ingestion.py
+
+      configuration:
+        mongo_uri: "{{secrets/maven-market-secrets/mongo_uri}}"

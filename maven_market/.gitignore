@@ -1,0 +1,22 @@
+# Security & Local Configs (Crucial)
+.env
+*.env
+*.pem
+*.key
+secrets*.yml
+*.tfvars
+configs/config.yml
+
+# Testing & Linting Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+

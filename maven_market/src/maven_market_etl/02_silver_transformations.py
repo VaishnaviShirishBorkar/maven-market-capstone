@@ -9,9 +9,9 @@ from pyspark import pipelines as dp
 import yaml
 from datetime import datetime, timezone
 from pyspark.sql.functions import (
-    col, trim, concat_ws, coalesce, to_date, to_timestamp, year, quarter,
+    col, trim, concat, concat_ws, coalesce, to_date, to_timestamp, year, quarter,
     month, date_format, dayofmonth, dayofweek, when, lit, round,
-    floor, months_between, current_date
+    floor, months_between, current_date, sha2, substring, upper
 )
 
 # ==========================================
@@ -197,21 +197,123 @@ dp.create_auto_cdc_from_snapshot_flow(
 # 5. Silver Streaming Fact Tables
 # ==========================================
 
+# Shared column projection ensuring transactions_silver and orders_silver follow the exact same schema
+UNIFIED_SALES_COLUMNS = [
+    "order_id",
+    "order_timestamp",
+    "order_date",
+    "transaction_date",
+    "stock_date",
+    "product_id",
+    "customer_id",
+    "store_id",
+    "store_name",
+    "region_id",
+    "product_name",
+    "product_brand",
+    "quantity",
+    "product_retail_price",
+    "product_cost",
+    "unit_profit_margin",
+    "total_amount",
+    "calculated_amount",
+    "total_cost",
+    "gross_profit",
+    "profit_margin_pct",
+    "source_channel",
+]
+
+
 @dp.table(
     name="transactions_silver",
-    comment="Cleansed point-of-sale transaction streaming fact table",
+    comment="Cleansed point-of-sale transaction streaming fact table enriched with order_id and product metadata",
     table_properties={"quality": "silver"}
 )
 @dp.expect_all_or_drop(expectations.get("transactions", {}))
 def transactions_silver():
-    return (
+    products_lookup = (
+        spark.read.table("products_scd")
+        .filter(col("__END_AT").isNull())
+        .select(
+            "product_id", "product_name", "product_brand",
+            "product_retail_price", "product_cost"
+        )
+        .withColumn(
+            "unit_profit_margin",
+            round(col("product_retail_price") - col("product_cost"), 2)
+        )
+    )
+    stores_lookup = spark.read.table("stores_silver").select("store_id", "store_name", "region_id")
+
+    # Read POS CSV stream and compute standardized dates and synthetic deterministic order_id
+    raw_tx = (
         spark.readStream.table(f"{BRONZE_SCHEMA}.transactions_raw")
-        .withColumn("transaction_date", coalesce(to_date(col("transaction_date"), "M/d/yyyy"), to_date(col("transaction_date"), "yyyy-MM-dd")))
-        .withColumn("stock_date", coalesce(to_date(col("stock_date"), "M/d/yyyy"), to_date(col("stock_date"), "yyyy-MM-dd")))
-        .withColumn("product_id", col("product_id").cast("integer"))
-        .withColumn("customer_id", col("customer_id").cast("integer"))
         .withColumn("store_id", col("store_id").cast("integer"))
+        .withColumn("customer_id", col("customer_id").cast("integer"))
+        .withColumn("product_id", col("product_id").cast("integer"))
         .withColumn("quantity", col("quantity").cast("integer"))
+        .withColumn("order_date", coalesce(
+            to_date(col("transaction_date"), "M/d/yyyy"),
+            to_date(col("transaction_date"), "yyyy-MM-dd")
+        ))
+        .withColumn("transaction_date", col("order_date"))
+        .withColumn("stock_date", coalesce(
+            to_date(col("stock_date"), "M/d/yyyy"),
+            to_date(col("stock_date"), "yyyy-MM-dd"),
+            col("order_date")
+        ))
+        .withColumn("order_timestamp", to_timestamp(col("order_date")))
+        .withColumn("source_channel", lit("POS"))
+        # Deterministic order_id: TXN_ + first 8 uppercase hex characters of row content SHA-256 hash
+        .withColumn(
+            "order_id",
+            concat(
+                lit("TXN_"),
+                upper(
+                    substring(
+                        sha2(
+                            concat_ws(
+                                "_",
+                                col("order_date"),
+                                col("store_id"),
+                                col("customer_id"),
+                                col("product_id"),
+                                col("quantity"),
+                                coalesce(col("stock_date"), lit(""))
+                            ),
+                            256
+                        ),
+                        1,
+                        8
+                    )
+                )
+            )
+        )
+    )
+
+    return (
+        raw_tx
+        .join(products_lookup, "product_id", "left")
+        .join(stores_lookup, "store_id", "left")
+        .withColumn("calculated_amount", round(col("quantity") * coalesce(col("product_retail_price"), lit(0.0)), 2))
+        .withColumn("total_amount", round(col("quantity") * coalesce(col("product_retail_price"), lit(0.0)), 2))
+        .withColumn("total_cost", round(col("quantity") * coalesce(col("product_cost"), lit(0.0)), 2))
+        .withColumn(
+            "gross_profit",
+            round(col("quantity") * (coalesce(col("product_retail_price"), lit(0.0)) - coalesce(col("product_cost"), lit(0.0))), 2)
+        )
+        .withColumn(
+            "profit_margin_pct",
+            when(
+                (col("quantity") * coalesce(col("product_retail_price"), lit(0.0))) > 0,
+                round(
+                    ((col("quantity") * (coalesce(col("product_retail_price"), lit(0.0)) - coalesce(col("product_cost"), lit(0.0))))
+                     / (col("quantity") * col("product_retail_price"))) * 100,
+                    2
+                )
+            ).otherwise(lit(0.0))
+        )
+        .select(*UNIFIED_SALES_COLUMNS)
     )
 
 
@@ -253,8 +355,9 @@ def orders_silver():
     )
     stores_lookup = spark.read.table("stores_silver").select("store_id", "store_name", "region_id")
 
-    return (
+    raw_orders = (
         spark.readStream.table(f"{BRONZE_SCHEMA}.orders_raw")
+        .withColumn("order_id", trim(col("order_id")))
         .withColumn("store_id", col("store_id").cast("integer"))
         .withColumn("customer_id", col("customer_id").cast("integer"))
         .withColumn("product_id", col("product_id").cast("integer"))
@@ -266,9 +369,34 @@ def orders_silver():
             to_timestamp(col("order_timestamp"))
         ))
         .withWatermark("order_timestamp", "10 minutes")
+        .withColumn("order_date", to_date(col("order_timestamp")))
+        .withColumn("transaction_date", to_date(col("order_timestamp")))
+        .withColumn("stock_date", to_date(col("order_timestamp")))
+        .withColumn("source_channel", lit("KAFKA"))
+    )
+
+    return (
+        raw_orders
         .join(products_lookup, "product_id", "left")
         .join(stores_lookup, "store_id", "left")
-        .withColumn("calculated_amount", round(col("quantity") * col("product_retail_price"), 2))
+        .withColumn("calculated_amount", round(col("quantity") * coalesce(col("product_retail_price"), lit(0.0)), 2))
+        .withColumn("total_cost", round(col("quantity") * coalesce(col("product_cost"), lit(0.0)), 2))
+        .withColumn(
+            "gross_profit",
+            round(col("quantity") * (coalesce(col("product_retail_price"), lit(0.0)) - coalesce(col("product_cost"), lit(0.0))), 2)
+        )
+        .withColumn(
+            "profit_margin_pct",
+            when(
+                (col("quantity") * coalesce(col("product_retail_price"), lit(0.0))) > 0,
+                round(
+                    ((col("quantity") * (coalesce(col("product_retail_price"), lit(0.0)) - coalesce(col("product_cost"), lit(0.0))))
+                     / (col("quantity") * col("product_retail_price"))) * 100,
+                    2
+                )
+            ).otherwise(lit(0.0))
+        )
+        .select(*UNIFIED_SALES_COLUMNS)
     )
 
 

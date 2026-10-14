@@ -207,37 +207,41 @@ def gold_dim_calendar():
 
 @dlt.table(
     name="gold_fact_sales",
-    comment="Gold sales transaction fact table enriched with revenue, cost, and profit measures",
+    comment="Gold unified sales transaction fact table combining POS transactions and Kafka orders",
     table_properties={"quality": "gold"}
 )
 def gold_fact_sales():
     tx = spark.read.table(f"{SILVER_SCHEMA}.transactions_silver")
-    prod = spark.read.table(f"{SILVER_SCHEMA}.products_scd").filter(col("__END_AT").isNull())
+    orders = spark.read.table(f"{SILVER_SCHEMA}.orders_silver")
+
+    # Combine historical POS transactions and real-time Kafka orders
+    combined_sales = tx.unionByName(orders)
 
     return (
-        tx.join(prod, "product_id", "left")
-        .select(
-            tx.transaction_date.alias("sales_date"),
-            tx.stock_date,
-            tx.product_id,
-            tx.customer_id,
-            tx.store_id,
-            tx.quantity,
-            prod.product_retail_price,
-            prod.product_cost,
-            round(tx.quantity * prod.product_retail_price, 2).alias("gross_revenue"),
-            round(tx.quantity * prod.product_cost, 2).alias("total_cost"),
-            round(
-                tx.quantity * (prod.product_retail_price - prod.product_cost), 2
-            ).alias("gross_profit"),
-            when(
-                (tx.quantity * prod.product_retail_price) > 0,
-                round(
-                    ((tx.quantity * (prod.product_retail_price - prod.product_cost))
-                     / (tx.quantity * prod.product_retail_price)) * 100,
-                    2
-                )
-            ).alias("profit_margin_pct")
+        combined_sales.select(
+            "order_id",
+            col("order_date").alias("sales_date"),
+            "order_date",
+            "order_timestamp",
+            "stock_date",
+            "product_id",
+            "customer_id",
+            "store_id",
+            "store_name",
+            "region_id",
+            "product_name",
+            "product_brand",
+            "quantity",
+            "product_retail_price",
+            "product_cost",
+            "unit_profit_margin",
+            col("total_amount").alias("gross_revenue"),
+            "total_amount",
+            "calculated_amount",
+            "total_cost",
+            "gross_profit",
+            "profit_margin_pct",
+            "source_channel"
         )
     )
 
@@ -270,7 +274,8 @@ def gold_fact_orders():
     return orders.select(
         "order_id",
         "order_timestamp",
-        to_date(col("order_timestamp")).alias("order_date"),
+        "order_date",
+        col("order_date").alias("sales_date"),
         # Dashboard can group order_timestamp by minute for order-volume KPIs.
         "product_id",
         "customer_id",
@@ -281,10 +286,15 @@ def gold_fact_orders():
         "product_brand",
         "quantity",
         "total_amount",
+        col("total_amount").alias("gross_revenue"),
         "product_retail_price",
         "product_cost",
         "calculated_amount",
-        "unit_profit_margin"
+        "unit_profit_margin",
+        "total_cost",
+        "gross_profit",
+        "profit_margin_pct",
+        "source_channel"
     )
 
 

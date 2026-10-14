@@ -33,6 +33,19 @@ Dashboard mapping:
 - Real-Time Operations: `gold_fact_orders` and `gold_fact_inventory`.
 - Platform Health: the `audit.audit_logs` table and Databricks pipeline event/expectation metrics; this is operational telemetry, not a business fact table.
 
-`gold_fact_orders` and `gold_fact_inventory` read their Silver sources with `spark.readStream.table(...)` to keep the Gold outputs incremental. `gold_fact_inventory` preserves each observation; for a current-stock KPI, select the latest row per product/store rather than summing historical stock observations. `gold_fact_sales` calculates gross profit from the product retail price and cost directly, instead of referencing a column that is not present in `products_scd`.
+### Schema Unification & Gold Combination
+
+`transactions_raw` (pre-given historical POS CSV data) and `orders_raw` (real-time Kafka event data) are standardized in the Silver layer into a shared, unified schema across `transactions_silver` and `orders_silver`:
+
+- **Order Identification**: A deterministic, content-hashed `order_id` (`TXN_<hash>`) is generated for POS transactions to mirror the Kafka `order_id` (`ORD_<hash>`).
+- **Temporal Alignment**: Standardized `order_timestamp`, `order_date`, `transaction_date`, and `stock_date` columns are provided in both tables.
+- **Dimension Enrichment**: Both streams join against `products_scd` and `stores_silver` to append dimension keys, store names, product branding, retail prices, and costs.
+- **Financial Metrics**: Both tables calculate `total_amount`, `calculated_amount`, `total_cost`, `gross_profit`, and `profit_margin_pct`.
+- **Channel Lineage**: A `source_channel` column (`POS` vs `KAFKA`) identifies origin while preserving schema parity.
+
+In the Gold layer:
+- `gold_fact_sales` combines `transactions_silver` and `orders_silver` via `unionByName` into a single enterprise Kimball fact table for Executive Overview and Regional Sales dashboards.
+- `gold_fact_orders` reads `orders_silver` via `spark.readStream.table(...)` to provide low-latency incremental data for Real-Time Operations.
+- `gold_fact_inventory` preserves each observation; for a current-stock KPI, select the latest row per product/store rather than summing historical stock observations.
 
 The source code has been syntax-checked, but it has not been executed against a live Databricks workspace. Validate pipeline API/runtime compatibility, source table schemas, streaming checkpoints, and end-to-end dashboard queries after deployment.

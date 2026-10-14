@@ -5,7 +5,6 @@
 *.key
 secrets*.yml
 *.tfvars
-configs/config.yml
 
 # Testing & Linting Caches
 .pytest_cache/

@@ -3,7 +3,7 @@
 
 # COMMAND ----------
 import os
-import dlt
+from pyspark import pipelines as dp
 import yaml
 import pymongo
 from pyspark.sql.functions import current_timestamp, col, from_json
@@ -228,50 +228,50 @@ def read_kafka_stream(topic_name: str, schema: StructType):
 
 # --- Source 1: MongoDB Master Data (Materialized Views) ---
 
-@dlt.table(name="customers_raw", table_properties={"quality": "bronze", "delta.enableChangeDataFeed": "true"})
+@dp.materialized_view(name="customers_raw", comment="Full MongoDB customer snapshot refreshed on pipeline updates", table_properties={"quality": "bronze"})
 def customers_raw():
     return read_mongo_collection("customers", customer_schema)
 
 
-@dlt.table(name="products_raw", table_properties={"quality": "bronze", "delta.enableChangeDataFeed": "true"})
+@dp.materialized_view(name="products_raw", comment="Full MongoDB product snapshot refreshed on pipeline updates", table_properties={"quality": "bronze"})
 def products_raw():
     return read_mongo_collection("products", product_schema)
 
 
 # --- Source 2: Azure POS Auto Loader CSV Streams ---
 
-@dlt.table(name="transactions_raw", table_properties={"quality": "bronze"})
+@dp.table(name="transactions_raw", table_properties={"quality": "bronze"})
 def transactions_raw():
     return read_pos_csv("MavenMarket_Transactions*.csv", transactions_schema)
 
 
-@dlt.table(name="returns_raw", table_properties={"quality": "bronze"})
+@dp.table(name="returns_raw", table_properties={"quality": "bronze"})
 def returns_raw():
     return read_pos_csv("MavenMarket_Returns*.csv", returns_schema)
 
 
-@dlt.table(name="stores_raw", table_properties={"quality": "bronze"})
+@dp.table(name="stores_raw", table_properties={"quality": "bronze"})
 def stores_raw():
     return read_pos_csv("MavenMarket_Stores*.csv", stores_schema)
 
 
-@dlt.table(name="regions_raw", table_properties={"quality": "bronze"})
+@dp.table(name="regions_raw", table_properties={"quality": "bronze"})
 def regions_raw():
     return read_pos_csv("MavenMarket_Regions*.csv", regions_schema)
 
 
-@dlt.table(name="calendar_raw", table_properties={"quality": "bronze"})
+@dp.table(name="calendar_raw", table_properties={"quality": "bronze"})
 def calendar_raw():
     return read_pos_csv("MavenMarket_Calendar*.csv", calendar_schema)
 
 
 # --- Source 3: Real-Time Kafka Event Streams ---
 
-@dlt.table(name="orders_raw", table_properties={"quality": "bronze"})
+@dp.table(name="orders_raw", table_properties={"quality": "bronze"})
 def orders_raw():
     return read_kafka_stream(ORDERS_TOPIC, orders_schema)
 
 
-@dlt.table(name="inventory_raw", table_properties={"quality": "bronze"})
+@dp.table(name="inventory_raw", table_properties={"quality": "bronze"})
 def inventory_raw():
     return read_kafka_stream(INVENTORY_TOPIC, inventory_schema)

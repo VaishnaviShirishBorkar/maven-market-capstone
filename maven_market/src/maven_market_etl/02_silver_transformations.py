@@ -1,34 +1,55 @@
 # Databricks notebook source
-# ==============================================================================
-# Pipeline: Maven Market — Silver Layer Delta Live Tables Pipeline
-# Script:   02_silver_transformations.py
-# Purpose:  Cleanses raw bronze data, tracks historical mutations via 
-#           AUTO CDC FROM SNAPSHOT for master data (Customers & Products),
-#           executes stream-static joins, and enforces dynamic DLT expectations.
-# ==============================================================================
+# MAGIC %md
+# MAGIC # Maven Market — Silver Layer Delta Live Tables Pipeline
 
+# COMMAND ----------
 import os
 import sys
+from pyspark import pipelines as dp
 import yaml
-import dlt
 from datetime import datetime, timezone
 from pyspark.sql.functions import (
     col, trim, concat_ws, coalesce, to_date, to_timestamp, year, quarter,
     month, date_format, dayofmonth, dayofweek, when, lit, round,
-    floor, months_between, current_date, current_timestamp
+    floor, months_between, current_date
 )
 
-# Lakeflow / DLT API aliasing
-try:
-    from pyspark import pipelines as dp
-except ImportError:
-    dp = dlt
-
-# ==============================================================================
-# 1. Config Parsing & Expectations Definition
-# ==============================================================================
+# ==========================================
+# 1. Path Resolution & Custom Logger Import
+# ==========================================
 curr_dir = os.getcwd()
+for _ in range(5):
+    if os.path.exists(os.path.join(curr_dir, "maven_market")):
+        if curr_dir not in sys.path:
+            sys.path.insert(0, curr_dir)
+        break
+    src_path = os.path.join(curr_dir, "src")
+    if os.path.exists(src_path) and os.path.exists(os.path.join(src_path, "maven_market")):
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        break
+    curr_dir = os.path.dirname(curr_dir)
+
+try:
+    from maven_market.silver_logger import log_silver_event
+    pipeline_start_time = datetime.now(timezone.utc)
+    log_silver_event(
+        spark=spark,
+        table_name="silver_pipeline_init",
+        status="SUCCESS",
+        record_count=0,
+        start_time=pipeline_start_time,
+        catalog_name="maven_market",
+        audit_schema="audit"
+    )
+except Exception as e:
+    print(f"Logger notification skipped: {str(e)}")
+
+# ==========================================
+# 2. Config Parsing & Expectations Definition
+# ==========================================
 config = {}
+curr_dir = os.getcwd()
 for _ in range(5):
     candidate = os.path.join(curr_dir, "configs", "config.yml")
     if os.path.exists(candidate):
@@ -41,45 +62,24 @@ catalog_name = config.get("unity_catalog", {}).get("catalog_name", "maven_market
 bronze_schema = config.get("unity_catalog", {}).get("schema_name", "bronze")
 BRONZE_SCHEMA = f"{catalog_name}.{bronze_schema}"
 
-# Dynamic quality expectations dictionary from config.yml
 expectations = config.get("expectations", {})
 
 
-# ==============================================================================
-# 2. Reusable Cleansing Helpers
-# ==============================================================================
-def parse_flexible_date(col_name: str):
-    """Parses mixed string date formats (M/d/yyyy and yyyy-MM-dd) into DateType."""
-    return coalesce(
-        to_date(col(col_name), "M/d/yyyy"),
-        to_date(col(col_name), "yyyy-MM-dd"),
-        to_date(col(col_name), "MM/dd/yyyy"),
-        to_date(col(col_name))
-    )
+# ==========================================
+# 3. Silver Streaming Dimensions (From CSV Auto Loader)
+# ==========================================
 
-def parse_flexible_timestamp(col_name: str):
-    """Parses ISO-8601 and standard formatted string timestamps into TimestampType."""
-    return coalesce(
-        to_timestamp(col(col_name), "yyyy-MM-dd'T'HH:mm:ss'Z'"),
-        to_timestamp(col(col_name), "yyyy-MM-dd HH:mm:ss"),
-        to_timestamp(col(col_name))
-    )
-
-
-# ==============================================================================
-# 3. Operational Streaming Dimensions (From Auto Loader CSV Sources)
-# ==============================================================================
-
-@dlt.table(
+@dp.table(
     name="calendar_silver",
-    comment="Cleansed calendar dimension enriched with derived calendar hierarchies",
+    comment="Cleansed calendar streaming dimension table",
     table_properties={"quality": "silver"}
 )
-@dlt.expect_all_or_drop(expectations.get("calendar", {}))
+@dp.expect_all_or_drop(expectations.get("calendar", {}))
 def calendar_silver():
+    # FIXED: Now read as a pure stream
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.calendar_raw")
-        .withColumn("date", parse_flexible_date("date"))
+        .withColumn("date", coalesce(to_date(col("date"), "M/d/yyyy"), to_date(col("date"), "yyyy-MM-dd")))
         .filter(col("date").isNotNull())
         .withColumn("year", year(col("date")))
         .withColumn("quarter", quarter(col("date")))
@@ -89,35 +89,35 @@ def calendar_silver():
         .withColumn("day_of_week", dayofweek(col("date")))
         .withColumn("day_name", date_format(col("date"), "EEEE"))
         .withColumn("is_weekend", when(dayofweek(col("date")).isin([1, 7]), True).otherwise(False))
-        .withColumn("silver_processed_timestamp", current_timestamp())
         .dropDuplicates(["date"])
     )
 
 
-@dlt.table(
+@dp.table(
     name="regions_silver",
-    comment="Cleansed sales regions master dimension table",
+    comment="Cleansed sales regions master streaming dimension table",
     table_properties={"quality": "silver"}
 )
-@dlt.expect_all_or_drop(expectations.get("regions", {}))
+@dp.expect_all_or_drop(expectations.get("regions", {}))
 def regions_silver():
+    # FIXED: Now read as a pure stream
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.regions_raw")
         .withColumn("region_id", col("region_id").cast("integer"))
         .withColumn("sales_district", trim(col("sales_district")))
         .withColumn("sales_region", trim(col("sales_region")))
-        .withColumn("silver_processed_timestamp", current_timestamp())
         .dropDuplicates(["region_id"])
     )
 
 
-@dlt.table(
+@dp.table(
     name="stores_silver",
-    comment="Cleansed store master dimension with square footage ratios and remodel age",
+    comment="Cleansed store streaming dimension table",
     table_properties={"quality": "silver"}
 )
-@dlt.expect_all_or_drop(expectations.get("stores", {}))
+@dp.expect_all_or_drop(expectations.get("stores", {}))
 def stores_silver():
+    # FIXED: Now read as a pure stream
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.stores_raw")
         .withColumn("store_id", col("store_id").cast("integer"))
@@ -129,264 +129,129 @@ def stores_silver():
         .withColumn("store_state", trim(col("store_state")))
         .withColumn("store_country", trim(col("store_country")))
         .withColumn("store_phone", trim(col("store_phone")))
-        .withColumn("first_opened_date", parse_flexible_date("first_opened_date"))
-        .withColumn("last_remodel_date", parse_flexible_date("last_remodel_date"))
+        .withColumn("first_opened_date", coalesce(to_date(col("first_opened_date"), "M/d/yyyy"), to_date(col("first_opened_date"), "yyyy-MM-dd")))
+        .withColumn("last_remodel_date", coalesce(to_date(col("last_remodel_date"), "M/d/yyyy"), to_date(col("last_remodel_date"), "yyyy-MM-dd")))
         .withColumn("total_sqft", col("total_sqft").cast("integer"))
         .withColumn("grocery_sqft", col("grocery_sqft").cast("integer"))
         .withColumn("grocery_sqft_pct", round((col("grocery_sqft") / col("total_sqft")) * 100, 2))
         .withColumn("years_since_remodel", floor(months_between(current_date(), col("last_remodel_date")) / 12))
-        .withColumn("silver_processed_timestamp", current_timestamp())
         .dropDuplicates(["store_id"])
     )
 
 
-# ==============================================================================
-# 4. Master Data: Current State + AUTO CDC FROM SNAPSHOT (MongoDB Sources)
-# ==============================================================================
+# ==========================================
+# 4. Silver Batch Dimensions (From MongoDB)
+# ==========================================
 
-# ------------------------------------------------------------------------------
-# 4A. PRODUCTS MASTER DATA
-# ------------------------------------------------------------------------------
-
-@dlt.table(
-    name="products_silver",
-    comment="Current active product catalog dimension with margins and cost classification",
-    table_properties={"quality": "silver"}
-)
-@dlt.expect_all_or_drop(expectations.get("products", {}))
-def products_silver():
-    """Current active snapshot: 1 deduplicated record per product_id."""
-    return (
-        spark.read.table(f"{BRONZE_SCHEMA}.products_raw")
-        .select(
-            col("product_id").cast("integer").alias("product_id"),
-            trim(col("product_brand")).alias("product_brand"),
-            trim(col("product_name")).alias("product_name"),
-            col("product_sku").cast("long").alias("product_sku"),
-            col("product_retail_price").cast("double").alias("product_retail_price"),
-            col("product_cost").cast("double").alias("product_cost"),
-            col("product_weight").cast("double").alias("product_weight"),
-            coalesce(col("recyclable"), lit(0.0)).cast("integer").alias("recyclable"),
-            coalesce(col("low_fat"), lit(0.0)).cast("integer").alias("low_fat")
-        )
-        .withColumn("unit_profit_margin", round(col("product_retail_price") - col("product_cost"), 2))
-        .withColumn("profit_margin_pct", round(((col("product_retail_price") - col("product_cost")) / col("product_retail_price")) * 100, 2))
-        .withColumn("cost_category", when(col("product_cost") > 5.0, "High").when(col("product_cost") > 2.0, "Medium").otherwise("Low"))
-        .withColumn("silver_processed_timestamp", current_timestamp())
-        .dropDuplicates(["product_id"])
-    )
-
-
-@dlt.view(name="products_snapshot_v")
-@dlt.expect_all_or_drop(expectations.get("products", {}))
-def products_snapshot_v():
-    """
-    Cleansed batch view feeding the Snapshot CDC engine.
-    Explicitly projects only business attributes to avoid false diff triggers from metadata.
-    """
-    return (
-        spark.read.table(f"{BRONZE_SCHEMA}.products_raw")
-        .select(
-            col("product_id").cast("integer").alias("product_id"),
-            trim(col("product_brand")).alias("product_brand"),
-            trim(col("product_name")).alias("product_name"),
-            col("product_sku").cast("long").alias("product_sku"),
-            col("product_retail_price").cast("double").alias("product_retail_price"),
-            col("product_cost").cast("double").alias("product_cost"),
-            col("product_weight").cast("double").alias("product_weight"),
-            coalesce(col("recyclable"), lit(0.0)).cast("integer").alias("recyclable"),
-            coalesce(col("low_fat"), lit(0.0)).cast("integer").alias("low_fat")
-        )
-        .dropDuplicates(["product_id"])
-    )
-
+# ==========================================
+# 4. Customer and Product SCD Type 2
+# ==========================================
+# Bronze customers_raw and products_raw are materialized views that reread
+# complete MongoDB snapshots when the Bronze pipeline is updated.
+# AUTO CDC FROM SNAPSHOT compares successive snapshots and maintains history.
+# No intermediate Silver source views are required.
+#
+# Important: each source snapshot must contain the complete collection.
+# Missing keys in a snapshot can be interpreted as deleted records.
 
 dp.create_streaming_table(
-    name="products_scd2_silver",
-    comment="Historical SCD Type 2 Product Master Data tracked via snapshot diffs",
+    name="customers_scd",
+    comment="SCD Type 2 customer history maintained from MongoDB snapshots",
     table_properties={"quality": "silver"}
 )
 
-# product_id is the primary key; SCD2 is applied across all non-key descriptive attributes
-if hasattr(dp, "create_auto_cdc_from_snapshot_flow"):
-    dp.create_auto_cdc_from_snapshot_flow(
-        target="products_scd2_silver",
-        source="products_snapshot_v",
-        keys=["product_id"],
-        stored_as_scd_type=2
-    )
-else:
-    dlt.apply_changes_from_snapshot(
-        target="products_scd2_silver",
-        source="products_snapshot_v",
-        keys=["product_id"],
-        stored_as_scd_type=2
-    )
-
-
-# ------------------------------------------------------------------------------
-# 4B. CUSTOMERS MASTER DATA
-# ------------------------------------------------------------------------------
-
-@dlt.table(
-    name="customers_silver",
-    comment="Current active customer dimension table with demographic calculations",
-    table_properties={"quality": "silver"}
+dp.create_auto_cdc_from_snapshot_flow(
+    target="customers_scd",
+    source=f"{BRONZE_SCHEMA}.customers_raw",
+    keys=["customer_id"],
+    stored_as_scd_type=2,
+    track_history_column_list=[
+        "first_name", "last_name", "customer_address", "customer_city",
+        "customer_state_province", "customer_postal_code", "customer_country",
+        "birthdate", "marital_status", "yearly_income", "total_children",
+        "education", "gender", "homeowner", "member_card", "occupation",
+        "acct_open_date", "customer_acct_num", "num_children_at_home"
+    ]
 )
-@dlt.expect_all_or_drop(expectations.get("customers", {}))
-def customers_silver():
-    """Current active snapshot: 1 deduplicated record per customer_id."""
-    return (
-        spark.read.table(f"{BRONZE_SCHEMA}.customers_raw")
-        .select(
-            col("customer_id").cast("integer").alias("customer_id"),
-            col("customer_acct_num").cast("long").alias("customer_acct_num"),
-            trim(col("first_name")).alias("first_name"),
-            trim(col("last_name")).alias("last_name"),
-            concat_ws(" ", trim(col("first_name")), trim(col("last_name"))).alias("full_name"),
-            trim(col("customer_address")).alias("customer_address"),
-            trim(col("customer_city")).alias("customer_city"),
-            trim(col("customer_state_province")).alias("customer_state_province"),
-            trim(col("customer_postal_code")).alias("customer_postal_code"),
-            trim(col("customer_country")).alias("customer_country"),
-            parse_flexible_date("birthdate").alias("birthdate"),
-            parse_flexible_date("acct_open_date").alias("acct_open_date"),
-            trim(col("gender")).alias("gender"),
-            trim(col("marital_status")).alias("marital_status"),
-            trim(col("yearly_income")).alias("yearly_income"),
-            col("total_children").cast("integer").alias("total_children"),
-            col("num_children_at_home").cast("integer").alias("num_children_at_home"),
-            trim(col("education")).alias("education"),
-            trim(col("member_card")).alias("member_card"),
-            trim(col("occupation")).alias("occupation"),
-            trim(col("homeowner")).alias("homeowner")
-        )
-        .withColumn("age", floor(months_between(current_date(), col("birthdate")) / 12))
-        .withColumn("tenure_years", floor(months_between(current_date(), col("acct_open_date")) / 12))
-        .withColumn("silver_processed_timestamp", current_timestamp())
-        .dropDuplicates(["customer_id"])
-    )
-
-
-@dlt.view(name="customers_snapshot_v")
-@dlt.expect_all_or_drop(expectations.get("customers", {}))
-def customers_snapshot_v():
-    """
-    Cleansed batch view feeding the Snapshot CDC engine.
-    Explicitly projects only business attributes to avoid false diff triggers from metadata.
-    """
-    return (
-        spark.read.table(f"{BRONZE_SCHEMA}.customers_raw")
-        .select(
-            col("customer_id").cast("integer").alias("customer_id"),
-            col("customer_acct_num").cast("long").alias("customer_acct_num"),
-            trim(col("first_name")).alias("first_name"),
-            trim(col("last_name")).alias("last_name"),
-            concat_ws(" ", trim(col("first_name")), trim(col("last_name"))).alias("full_name"),
-            trim(col("customer_address")).alias("customer_address"),
-            trim(col("customer_city")).alias("customer_city"),
-            trim(col("customer_state_province")).alias("customer_state_province"),
-            trim(col("customer_postal_code")).alias("customer_postal_code"),
-            trim(col("customer_country")).alias("customer_country"),
-            parse_flexible_date("birthdate").alias("birthdate"),
-            parse_flexible_date("acct_open_date").alias("acct_open_date"),
-            trim(col("gender")).alias("gender"),
-            trim(col("marital_status")).alias("marital_status"),
-            trim(col("yearly_income")).alias("yearly_income"),
-            col("total_children").cast("integer").alias("total_children"),
-            col("num_children_at_home").cast("integer").alias("num_children_at_home"),
-            trim(col("education")).alias("education"),
-            trim(col("member_card")).alias("member_card"),
-            trim(col("occupation")).alias("occupation"),
-            trim(col("homeowner")).alias("homeowner")
-        )
-        .dropDuplicates(["customer_id"])
-    )
-
 
 dp.create_streaming_table(
-    name="customers_scd2_silver",
-    comment="Historical SCD Type 2 Customer Master Data tracked via snapshot diffs",
+    name="products_scd",
+    comment="SCD Type 2 product history maintained from MongoDB snapshots",
     table_properties={"quality": "silver"}
 )
 
-# customer_id is the primary key; SCD2 is applied across all non-key descriptive attributes
-if hasattr(dp, "create_auto_cdc_from_snapshot_flow"):
-    dp.create_auto_cdc_from_snapshot_flow(
-        target="customers_scd2_silver",
-        source="customers_snapshot_v",
-        keys=["customer_id"],
-        stored_as_scd_type=2
-    )
-else:
-    dlt.apply_changes_from_snapshot(
-        target="customers_scd2_silver",
-        source="customers_snapshot_v",
-        keys=["customer_id"],
-        stored_as_scd_type=2
-    )
+dp.create_auto_cdc_from_snapshot_flow(
+    target="products_scd",
+    source=f"{BRONZE_SCHEMA}.products_raw",
+    keys=["product_id"],
+    stored_as_scd_type=2,
+    track_history_column_list=[
+        "product_brand", "product_name", "product_sku",
+        "product_retail_price", "product_cost", "product_weight",
+        "recyclable", "low_fat"
+    ]
+)
 
 
-# ==============================================================================
-# 5. Cleansed POS Streaming Facts (From Auto Loader CSV Sources)
-# ==============================================================================
+# ==========================================
+# 5. Silver Streaming Fact Tables
+# ==========================================
 
-@dlt.table(
+@dp.table(
     name="transactions_silver",
-    comment="Cleansed point-of-sale transaction fact table with validated quantities",
+    comment="Cleansed point-of-sale transaction streaming fact table",
     table_properties={"quality": "silver"}
 )
-@dlt.expect_all_or_drop(expectations.get("transactions", {}))
+@dp.expect_all_or_drop(expectations.get("transactions", {}))
 def transactions_silver():
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.transactions_raw")
-        .withColumn("transaction_date", parse_flexible_date("transaction_date"))
-        .withColumn("stock_date", parse_flexible_date("stock_date"))
+        .withColumn("transaction_date", coalesce(to_date(col("transaction_date"), "M/d/yyyy"), to_date(col("transaction_date"), "yyyy-MM-dd")))
+        .withColumn("stock_date", coalesce(to_date(col("stock_date"), "M/d/yyyy"), to_date(col("stock_date"), "yyyy-MM-dd")))
         .withColumn("product_id", col("product_id").cast("integer"))
         .withColumn("customer_id", col("customer_id").cast("integer"))
         .withColumn("store_id", col("store_id").cast("integer"))
         .withColumn("quantity", col("quantity").cast("integer"))
-        .withColumn("silver_processed_timestamp", current_timestamp())
     )
 
 
-@dlt.table(
+@dp.table(
     name="returns_silver",
-    comment="Cleansed product returns fact table with validated return volumes",
+    comment="Cleansed product return streaming fact table",
     table_properties={"quality": "silver"}
 )
-@dlt.expect_all_or_drop(expectations.get("returns", {}))
+@dp.expect_all_or_drop(expectations.get("returns", {}))
 def returns_silver():
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.returns_raw")
-        .withColumn("return_date", parse_flexible_date("return_date"))
+        .withColumn("return_date", coalesce(to_date(col("return_date"), "M/d/yyyy"), to_date(col("return_date"), "yyyy-MM-dd")))
         .withColumn("product_id", col("product_id").cast("integer"))
         .withColumn("store_id", col("store_id").cast("integer"))
         .withColumn("quantity", col("quantity").cast("integer"))
-        .withColumn("silver_processed_timestamp", current_timestamp())
     )
 
 
-# ==============================================================================
-# 6. Stream-Static Enriched Fact Tables with Watermarking (Real-Time Kafka)
-# ==============================================================================
-
-@dlt.table(
+@dp.table(
     name="orders_silver",
-    comment="Real-time Kafka orders enriched with store, customer, and product metadata",
+    comment="Real-time Kafka orders streaming fact table enriched with dimension metadata",
     table_properties={"quality": "silver"}
 )
-@dlt.expect_all_or_drop(expectations.get("orders", {}))
+@dp.expect_all_or_drop(expectations.get("orders", {}))
 def orders_silver():
-    products_lookup = dlt.read("products_silver").select(
-        "product_id", "product_name", "product_brand", "product_retail_price", "unit_profit_margin"
+    # Uses spark.read.table() to take a batch snapshot of the Silver tables for the stream-static join
+    products_lookup = (
+        spark.read.table("products_scd")
+        .filter(col("__END_AT").isNull())
+        .select(
+            "product_id", "product_name", "product_brand",
+            "product_retail_price", "product_cost"
+        )
+        .withColumn(
+            "unit_profit_margin",
+            round(col("product_retail_price") - col("product_cost"), 2)
+        )
     )
-    stores_lookup = dlt.read("stores_silver").select(
-        "store_id", "store_name", "region_id"
-    )
-    customers_lookup = dlt.read("customers_silver").select(
-        "customer_id", "full_name", "customer_country", "member_card"
-    )
+    stores_lookup = spark.read.table("stores_silver").select("store_id", "store_name", "region_id")
 
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.orders_raw")
@@ -395,40 +260,46 @@ def orders_silver():
         .withColumn("product_id", col("product_id").cast("integer"))
         .withColumn("quantity", col("quantity").cast("integer"))
         .withColumn("total_amount", col("total_amount").cast("double"))
-        .withColumn("order_timestamp", parse_flexible_timestamp("order_timestamp"))
+        .withColumn("order_timestamp", coalesce(
+            to_timestamp(col("order_timestamp"), "yyyy-MM-dd'T'HH:mm:ss'Z'"),
+            to_timestamp(col("order_timestamp"), "yyyy-MM-dd HH:mm:ss"),
+            to_timestamp(col("order_timestamp"))
+        ))
         .withWatermark("order_timestamp", "10 minutes")
-        .join(products_lookup, on="product_id", how="left")
-        .join(stores_lookup, on="store_id", how="left")
-        .join(customers_lookup, on="customer_id", how="left")
+        .join(products_lookup, "product_id", "left")
+        .join(stores_lookup, "store_id", "left")
         .withColumn("calculated_amount", round(col("quantity") * col("product_retail_price"), 2))
-        .withColumn("silver_processed_timestamp", current_timestamp())
     )
 
 
-@dlt.table(
+@dp.table(
     name="inventory_silver",
-    comment="Real-time Kafka inventory snapshots enriched with product/store metadata and alerts",
+    comment="Real-time Kafka inventory streaming snapshot table enriched with dimension metadata",
     table_properties={"quality": "silver"}
 )
-@dlt.expect_all_or_drop(expectations.get("inventory", {}))
+@dp.expect_all_or_drop(expectations.get("inventory", {}))
 def inventory_silver():
-    products_lookup = dlt.read("products_silver").select(
-        "product_id", "product_name", "product_brand"
+    # Uses spark.read.table() to take a batch snapshot of the Silver tables for the stream-static join
+    products_lookup = (
+        spark.read.table("products_scd")
+        .filter(col("__END_AT").isNull())
+        .select("product_id", "product_name", "product_brand")
     )
-    stores_lookup = dlt.read("stores_silver").select(
-        "store_id", "store_name", "region_id"
-    )
+    stores_lookup = spark.read.table("stores_silver").select("store_id", "store_name")
 
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.inventory_raw")
         .withColumn("store_id", col("store_id").cast("integer"))
         .withColumn("product_id", col("product_id").cast("integer"))
         .withColumn("stock_level", col("stock_level").cast("integer"))
-        .withColumn("inventory_timestamp", parse_flexible_timestamp("inventory_timestamp"))
+        .withColumn("inventory_timestamp", coalesce(
+            to_timestamp(col("inventory_timestamp"), "yyyy-MM-dd'T'HH:mm:ss'Z'"),
+            to_timestamp(col("inventory_timestamp"), "yyyy-MM-dd HH:mm:ss"),
+            to_timestamp(col("inventory_timestamp"))
+        ))
         .withWatermark("inventory_timestamp", "10 minutes")
-        .join(products_lookup, on="product_id", how="left")
-        .join(stores_lookup, on="store_id", how="left")
+        .join(products_lookup, "product_id", "left")
+        .join(stores_lookup, "store_id", "left")
         .withColumn("is_low_stock", when(col("stock_level") < 10, True).otherwise(False))
         .withColumn("reorder_required", when(col("stock_level") < 10, True).otherwise(False))
-        .withColumn("silver_processed_timestamp", current_timestamp())
     )

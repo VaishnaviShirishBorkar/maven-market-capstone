@@ -1,0 +1,10 @@
+resources:
+  pipelines:
+    maven_market_silver_pipeline:
+      name: maven_market_silver_pipeline_${bundle.target}
+      catalog: ${var.catalog}
+      target: silver
+      serverless: true
+      libraries:
+        - notebook:
+            path: ../src/maven_market_etl/02_silver_transformations.py

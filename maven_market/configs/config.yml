@@ -1,0 +1,69 @@
+environment: "dev"
+
+unity_catalog:
+  catalog_name: "maven_market"
+  schema_name: "bronze"
+  external_location_path: "abfss://maven-market-data@sgdbxcapstone.dfs.core.windows.net/data"
+
+mongodb:
+  database_name: "maven_market"
+  secret_scope: "maven-market-secrets"
+  secret_key: "mongouri"
+  collections:
+    - customers
+    - products
+
+kafka:
+  bootstrap_servers: "pkc-w77k7w.centralus.azure.confluent.cloud:9092"
+  secret_scope: "maven-market-secrets"
+  api_key_name: "confluent-api-key"
+  api_secret_name: "confluent-api-secret"
+  orders_topic: "maven_orders"
+  inventory_topic: "maven_inventory"
+
+pos_csv_sources:
+  - pattern: "MavenMarket_Transactions*.csv"
+    table_name: "transactions_raw"
+  - pattern: "MavenMarket_Returns*.csv"
+    table_name: "returns_raw"
+  - pattern: "MavenMarket_Stores*.csv"
+    table_name: "stores_raw"
+  - pattern: "MavenMarket_Regions*.csv"
+    table_name: "regions_raw"
+  - pattern: "MavenMarket_Calendar*.csv"
+    table_name: "calendar_raw"
+
+expectations:
+  transactions:
+    valid_order_id: "order_id IS NOT NULL"
+    valid_quantity: "quantity > 0"
+    valid_product_id: "product_id IS NOT NULL"
+    valid_store_id: "store_id IS NOT NULL"
+    valid_total_amount: "total_amount >= 0"
+  returns:
+    valid_quantity: "quantity > 0"
+    valid_product_id: "product_id IS NOT NULL"
+    valid_store_id: "store_id IS NOT NULL"
+  orders:
+    valid_order_id: "order_id IS NOT NULL"
+    valid_quantity: "quantity > 0"
+    valid_product_id: "product_id IS NOT NULL"
+    valid_store_id: "store_id IS NOT NULL"
+    valid_total_amount: "total_amount >= 0"
+  inventory:
+    valid_stock_level: "stock_level >= 0"
+    valid_store_id: "store_id IS NOT NULL"
+    valid_product_id: "product_id IS NOT NULL"
+  customers:
+    valid_customer_id: "customer_id IS NOT NULL"
+  products:
+    valid_product_id: "product_id IS NOT NULL"
+    valid_retail_price: "product_retail_price >= 0"
+    valid_cost: "product_cost >= 0"
+  stores:
+    valid_store_id: "store_id IS NOT NULL"
+    valid_total_sqft: "total_sqft > 0"
+  regions:
+    valid_region_id: "region_id IS NOT NULL"
+  calendar:
+    valid_date: "date IS NOT NULL"

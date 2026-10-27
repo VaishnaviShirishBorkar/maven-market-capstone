@@ -1,0 +1,84 @@
+name: Maven Market Lakehouse CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+      - dev
+
+jobs:
+  lint_and_test:
+    name: Code Quality & Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Linting & Testing Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest pyyaml
+
+      - name: Lint Code with Ruff
+        run: |
+          ruff check src/ tests/
+
+      - name: Run Unit Tests
+        run: |
+          pytest tests/ -v
+
+  bundle_deploy_dev:
+    name: Deploy to Dev
+    needs: lint_and_test
+    if: github.ref == 'refs/heads/dev' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Databricks CLI
+        uses: databricks/setup-cli@v0.2
+
+      - name: Validate Databricks Asset Bundle (Dev)
+        run: |
+          databricks bundle validate -t dev
+
+      - name: Deploy Databricks Asset Bundle (Dev)
+        run: |
+          databricks bundle deploy -t dev
+
+  bundle_deploy_prod:
+    name: Deploy to Production
+    needs: lint_and_test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Databricks CLI
+        uses: databricks/setup-cli@v0.2
+
+      - name: Validate Databricks Asset Bundle (Prod)
+        run: |
+          databricks bundle validate -t prod
+
+      - name: Deploy Databricks Asset Bundle (Prod)
+        run: |
+          databricks bundle deploy -t prod

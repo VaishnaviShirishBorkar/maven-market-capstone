@@ -1,11 +1,27 @@
-# resources/sample_job.job.yml
 resources:
   jobs:
     maven_market_job:
       name: maven_market_job_${bundle.target}
-      
+
       tasks:
         - task_key: run_bronze_ingestion_pipeline
           pipeline_task:
-            # References the DLT pipeline defined in maven_market_etl.pipeline.yml
-            pipeline_id: ${resources.pipelines.maven_market_etl_pipeline.id}
+            pipeline_id: ${resources.pipelines.maven_market_bronze_pipeline.id}
+
+        - task_key: run_silver_transformation_pipeline
+          depends_on:
+            - task_key: run_bronze_ingestion_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.maven_market_silver_pipeline.id}
+
+        - task_key: run_gold_aggregation_pipeline
+          depends_on:
+            - task_key: run_silver_transformation_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.maven_market_gold_pipeline.id}
+
+        - task_key: run_audit_telemetry_sync
+          depends_on:
+            - task_key: run_gold_aggregation_pipeline
+          notebook_task:
+            notebook_path: ../src/maven_market_etl/04_audit_telemetry_sync.py

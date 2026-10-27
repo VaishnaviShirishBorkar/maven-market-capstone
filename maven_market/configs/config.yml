@@ -3,7 +3,7 @@ environment: "dev"
 unity_catalog:
   catalog_name: "maven_market"
   schema_name: "bronze"
-  external_location_path: "abfss://maven-market-data@sgcapstone.dfs.core.windows.net/data"
+  external_location_path: "abfss://maven-market-data@sgdbxcapstone.dfs.core.windows.net/data"
 
 mongodb:
   database_name: "maven_market"

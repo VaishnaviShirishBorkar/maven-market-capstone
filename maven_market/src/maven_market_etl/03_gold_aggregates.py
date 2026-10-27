@@ -6,11 +6,14 @@
 # COMMAND ----------
 import os
 import sys
-import dlt
+try:
+    import dlt
+except ImportError:
+    from pyspark import pipelines as dlt
 import yaml
 from datetime import datetime, timezone
 from pyspark.sql.functions import (
-    col, round, coalesce, lit, concat_ws, floor, months_between, current_date, when, to_date
+    col, round, coalesce, lit, concat_ws, floor, months_between, current_date, when, to_date, regexp_extract
 )
 
 # ==========================================
@@ -68,7 +71,7 @@ SILVER_SCHEMA = f"{catalog_name}.silver"
 
 @dlt.table(
     name="gold_dim_customers",
-    comment="Gold customer dimension lookup table for BI reporting",
+    comment="Gold customer dimension lookup table for BI reporting with integer yearly_income",
     table_properties={"quality": "gold"}
 )
 def gold_dim_customers():
@@ -101,10 +104,30 @@ def gold_dim_customers():
             "tenure_years",
             floor(months_between(current_date(), col("acct_open_date")) / 12)
         )
+        # Preserve original readable bracket string and map to integer income
+        .withColumn("yearly_income_bracket", col("yearly_income"))
+        .withColumn(
+            "yearly_income",
+            when(col("yearly_income") == "$10K - $30K", lit(20000))
+            .when(col("yearly_income") == "$30K - $50K", lit(40000))
+            .when(col("yearly_income") == "$50K - $70K", lit(60000))
+            .when(col("yearly_income") == "$70K - $90K", lit(80000))
+            .when(col("yearly_income") == "$90K - $110K", lit(100000))
+            .when(col("yearly_income") == "$110K - $130K", lit(120000))
+            .when(col("yearly_income") == "$130K - $150K", lit(140000))
+            .when(col("yearly_income") == "$150K +", lit(150000))
+            .otherwise(
+                coalesce(
+                    regexp_extract(col("yearly_income"), r"\$(\d+)K", 1).cast("int") * 1000,
+                    col("yearly_income").cast("int"),
+                    lit(0)
+                )
+            ).cast("integer")
+        )
     )
     return customers.select(
         "customer_id", "customer_acct_num", "full_name", "first_name",
-        "last_name", "gender", "marital_status", "yearly_income",
+        "last_name", "gender", "marital_status", "yearly_income", "yearly_income_bracket",
         "occupation", "education", "homeowner", "customer_city",
         "customer_state_province", "customer_country", "birthdate", "age",
         "acct_open_date", "tenure_years"
@@ -112,7 +135,7 @@ def gold_dim_customers():
 
 @dlt.table(
     name="gold_dim_products",
-    comment="Gold product catalog dimension lookup table",
+    comment="Gold product catalog dimension lookup table with boolean attributes",
     table_properties={"quality": "gold"}
 )
 def gold_dim_products():
@@ -140,6 +163,8 @@ def gold_dim_products():
             .when(col("product_cost") > 2.0, "Medium")
             .otherwise("Low")
         )
+        .withColumn("recyclable", when(col("recyclable") == 1.0, lit(True)).otherwise(lit(False)))
+        .withColumn("low_fat", when(col("low_fat") == 1.0, lit(True)).otherwise(lit(False)))
     )
     return products.select(
         "product_id", "product_brand", "product_name", "product_sku",
@@ -149,7 +174,7 @@ def gold_dim_products():
 
 @dlt.table(
     name="gold_dim_stores",
-    comment="Gold store dimension table enriched with regional hierarchy",
+    comment="Gold store dimension table enriched with regional hierarchy and ABAC data_region",
     table_properties={"quality": "gold"}
 )
 def gold_dim_stores():
@@ -167,6 +192,7 @@ def gold_dim_stores():
             stores.store_state,
             stores.store_country,
             stores.store_phone,
+            stores.data_region,
             regions.region_id,
             regions.sales_district,
             regions.sales_region,
@@ -181,7 +207,7 @@ def gold_dim_stores():
 
 @dlt.table(
     name="gold_dim_calendar",
-    comment="Gold calendar date dimension lookup table",
+    comment="Gold calendar date dimension lookup table with week_of_year",
     table_properties={"quality": "gold"}
 )
 def gold_dim_calendar():
@@ -193,6 +219,7 @@ def gold_dim_calendar():
             "quarter",
             "month",
             "month_name",
+            "week_of_year",
             "day_of_month",
             "day_of_week",
             "day_name",
@@ -207,7 +234,7 @@ def gold_dim_calendar():
 
 @dlt.table(
     name="gold_fact_sales",
-    comment="Gold unified sales transaction fact table combining POS transactions and Kafka orders",
+    comment="Gold unified sales transaction fact table combining POS transactions and Kafka orders with data_region",
     table_properties={"quality": "gold"}
 )
 def gold_fact_sales():
@@ -229,6 +256,7 @@ def gold_fact_sales():
             "store_id",
             "store_name",
             "region_id",
+            "data_region",
             "product_name",
             "product_brand",
             "quantity",
@@ -263,7 +291,7 @@ def gold_fact_returns():
 
 @dlt.table(
     name="gold_fact_orders",
-    comment="Gold streaming fact table for Kafka orders and real-time order-volume analytics",
+    comment="Gold streaming fact table for Kafka orders and real-time order-volume analytics with data_region",
     table_properties={"quality": "gold"}
 )
 def gold_fact_orders():
@@ -282,6 +310,7 @@ def gold_fact_orders():
         "store_id",
         "store_name",
         "region_id",
+        "data_region",
         "product_name",
         "product_brand",
         "quantity",
@@ -300,23 +329,32 @@ def gold_fact_orders():
 
 @dlt.table(
     name="gold_fact_inventory",
-    comment="Gold streaming inventory fact table for stock-level trends and replenishment alerts",
+    comment="Gold current inventory stock snapshot by store and product for real-time stock levels and replenishment alerts",
     table_properties={"quality": "gold"}
 )
 def gold_fact_inventory():
-    # Preserve each inventory observation. For current-stock cards, the dashboard
-    # should select the latest observation per product_id/store_id, not sum history.
-    inventory = spark.readStream.table(f"{SILVER_SCHEMA}.inventory_silver")
+    # Deduplicate historical observations: take the latest stock snapshot per store and product
+    # so dashboard sum/count metrics reflect CURRENT inventory rather than inflating over time.
+    from pyspark.sql.window import Window
+    from pyspark.sql.functions import row_number
 
-    return inventory.select(
-        "inventory_timestamp",
-        to_date(col("inventory_timestamp")).alias("inventory_date"),
-        "product_id",
-        "product_name",
-        "product_brand",
-        "store_id",
-        "store_name",
-        "stock_level",
-        "is_low_stock",
-        "reorder_required"
+    window_spec = Window.partitionBy("store_id", "product_id").orderBy(col("inventory_timestamp").desc())
+
+    return (
+        spark.read.table(f"{SILVER_SCHEMA}.inventory_silver")
+        .withColumn("row_num", row_number().over(window_spec))
+        .filter(col("row_num") == 1)
+        .drop("row_num")
+        .select(
+            "inventory_timestamp",
+            to_date(col("inventory_timestamp")).alias("inventory_date"),
+            "store_id",
+            "store_name",
+            "product_id",
+            "product_name",
+            "product_brand",
+            "stock_level",
+            "is_low_stock",
+            "reorder_required"
+        )
     )

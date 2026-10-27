@@ -3,6 +3,8 @@
 
 # COMMAND ----------
 import os
+import sys
+from datetime import datetime, timezone
 from pyspark import pipelines as dp
 import yaml
 import pymongo
@@ -10,6 +12,37 @@ from pyspark.sql.functions import current_timestamp, col, from_json
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType, LongType, DoubleType
 )
+
+# ==========================================
+# 0. Path Resolution & Custom Logger Import
+# ==========================================
+curr_dir = os.getcwd()
+for _ in range(5):
+    if os.path.exists(os.path.join(curr_dir, "maven_market")):
+        if curr_dir not in sys.path:
+            sys.path.insert(0, curr_dir)
+        break
+    src_path = os.path.join(curr_dir, "src")
+    if os.path.exists(src_path) and os.path.exists(os.path.join(src_path, "maven_market")):
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        break
+    curr_dir = os.path.dirname(curr_dir)
+
+try:
+    from maven_market.bronze_logger import log_bronze_event
+    pipeline_start_time = datetime.now(timezone.utc)
+    log_bronze_event(
+        spark=spark,
+        table_name="bronze_pipeline_init",
+        status="SUCCESS",
+        record_count=0,
+        start_time=pipeline_start_time,
+        catalog_name="maven_market",
+        audit_schema="audit"
+    )
+except Exception as e:
+    print(f"Bronze logger notification skipped: {str(e)}")
 
 # ==========================================
 # 1. Load Configuration & Secrets
@@ -25,10 +58,7 @@ for _ in range(5):
     curr_dir = os.path.dirname(curr_dir)
 
 # Storage & MongoDB configs
-raw_landing_zone = (
-    config.get("unity_catalog", {}).get("external_location_path")
-    or "abfss://maven-market-data@sgcapstone.dfs.core.windows.net/data"
-)
+raw_landing_zone = config.get("unity_catalog", {}).get("external_location_path", "")
 LANDING_ZONE = raw_landing_zone.rstrip("/")
 
 MONGO_SCOPE = config.get("mongodb", {}).get("secret_scope", "maven-market-secrets")
@@ -37,7 +67,7 @@ DB_NAME = config.get("mongodb", {}).get("database_name", "maven_market")
 mongo_uri = dbutils.secrets.get(scope=MONGO_SCOPE, key=MONGO_KEY)
 
 # Kafka configs
-KAFKA_BOOTSTRAP = config.get("kafka", {}).get("bootstrap_servers", "pkc-w77k7w.centralus.azure.confluent.cloud:9092")
+KAFKA_BOOTSTRAP = config.get("kafka", {}).get("bootstrap_servers", "")
 KAFKA_SCOPE = config.get("kafka", {}).get("secret_scope", MONGO_SCOPE)
 KAFKA_KEY_NAME = config.get("kafka", {}).get("api_key_name", "confluent-api-key")
 KAFKA_SECRET_NAME = config.get("kafka", {}).get("api_secret_name", "confluent-api-secret")

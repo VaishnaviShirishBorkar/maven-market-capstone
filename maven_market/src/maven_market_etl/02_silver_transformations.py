@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pyspark.sql.functions import (
     col, trim, concat, concat_ws, coalesce, to_date, to_timestamp, year, quarter,
     month, date_format, dayofmonth, dayofweek, when, lit, round,
-    floor, months_between, current_date, sha2, substring, upper
+    floor, months_between, current_date, sha2, substring, upper, weekofyear
 )
 
 # ==========================================
@@ -76,7 +76,6 @@ expectations = config.get("expectations", {})
 )
 @dp.expect_all_or_drop(expectations.get("calendar", {}))
 def calendar_silver():
-    # FIXED: Now read as a pure stream
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.calendar_raw")
         .withColumn("date", coalesce(to_date(col("date"), "M/d/yyyy"), to_date(col("date"), "yyyy-MM-dd")))
@@ -85,6 +84,7 @@ def calendar_silver():
         .withColumn("quarter", quarter(col("date")))
         .withColumn("month", month(col("date")))
         .withColumn("month_name", date_format(col("date"), "MMMM"))
+        .withColumn("week_of_year", weekofyear(col("date")))
         .withColumn("day_of_month", dayofmonth(col("date")))
         .withColumn("day_of_week", dayofweek(col("date")))
         .withColumn("day_name", date_format(col("date"), "EEEE"))
@@ -100,7 +100,6 @@ def calendar_silver():
 )
 @dp.expect_all_or_drop(expectations.get("regions", {}))
 def regions_silver():
-    # FIXED: Now read as a pure stream
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.regions_raw")
         .withColumn("region_id", col("region_id").cast("integer"))
@@ -112,12 +111,11 @@ def regions_silver():
 
 @dp.table(
     name="stores_silver",
-    comment="Cleansed store streaming dimension table",
+    comment="Cleansed store streaming dimension table with ABAC data_region taxonomy",
     table_properties={"quality": "silver"}
 )
 @dp.expect_all_or_drop(expectations.get("stores", {}))
 def stores_silver():
-    # FIXED: Now read as a pure stream
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.stores_raw")
         .withColumn("store_id", col("store_id").cast("integer"))
@@ -135,25 +133,21 @@ def stores_silver():
         .withColumn("grocery_sqft", col("grocery_sqft").cast("integer"))
         .withColumn("grocery_sqft_pct", round((col("grocery_sqft") / col("total_sqft")) * 100, 2))
         .withColumn("years_since_remodel", floor(months_between(current_date(), col("last_remodel_date")) / 12))
+        # ABAC Data Region Taxonomy based on store_country: USA -> NA, Canada -> EU, Mexico -> APAC
+        .withColumn(
+            "data_region",
+            when(col("store_country") == "USA", lit("NA"))
+            .when(col("store_country") == "Canada", lit("EU"))
+            .when(col("store_country") == "Mexico", lit("APAC"))
+            .otherwise(lit("NA"))
+        )
         .dropDuplicates(["store_id"])
     )
 
 
 # ==========================================
-# 4. Silver Batch Dimensions (From MongoDB)
-# ==========================================
-
-# ==========================================
 # 4. Customer and Product SCD Type 2
 # ==========================================
-# Bronze customers_raw and products_raw are materialized views that reread
-# complete MongoDB snapshots when the Bronze pipeline is updated.
-# AUTO CDC FROM SNAPSHOT compares successive snapshots and maintains history.
-# No intermediate Silver source views are required.
-#
-# Important: each source snapshot must contain the complete collection.
-# Missing keys in a snapshot can be interpreted as deleted records.
-
 dp.create_streaming_table(
     name="customers_scd",
     comment="SCD Type 2 customer history maintained from MongoDB snapshots",
@@ -209,6 +203,7 @@ UNIFIED_SALES_COLUMNS = [
     "store_id",
     "store_name",
     "region_id",
+    "data_region",
     "product_name",
     "product_brand",
     "quantity",
@@ -243,7 +238,7 @@ def transactions_silver():
             round(col("product_retail_price") - col("product_cost"), 2)
         )
     )
-    stores_lookup = spark.read.table("stores_silver").select("store_id", "store_name", "region_id")
+    stores_lookup = spark.read.table("stores_silver").select("store_id", "store_name", "region_id", "data_region")
 
     # Read POS CSV stream and compute standardized dates and synthetic deterministic order_id
     raw_tx = (
@@ -305,12 +300,8 @@ def transactions_silver():
         .withColumn(
             "profit_margin_pct",
             when(
-                (col("quantity") * coalesce(col("product_retail_price"), lit(0.0))) > 0,
-                round(
-                    ((col("quantity") * (coalesce(col("product_retail_price"), lit(0.0)) - coalesce(col("product_cost"), lit(0.0))))
-                     / (col("quantity") * col("product_retail_price"))) * 100,
-                    2
-                )
+                col("total_amount") > 0,
+                round((col("gross_profit") / col("total_amount")) * 100, 2)
             ).otherwise(lit(0.0))
         )
         .select(*UNIFIED_SALES_COLUMNS)
@@ -340,7 +331,6 @@ def returns_silver():
 )
 @dp.expect_all_or_drop(expectations.get("orders", {}))
 def orders_silver():
-    # Uses spark.read.table() to take a batch snapshot of the Silver tables for the stream-static join
     products_lookup = (
         spark.read.table("products_scd")
         .filter(col("__END_AT").isNull())
@@ -353,7 +343,7 @@ def orders_silver():
             round(col("product_retail_price") - col("product_cost"), 2)
         )
     )
-    stores_lookup = spark.read.table("stores_silver").select("store_id", "store_name", "region_id")
+    stores_lookup = spark.read.table("stores_silver").select("store_id", "store_name", "region_id", "data_region")
 
     raw_orders = (
         spark.readStream.table(f"{BRONZE_SCHEMA}.orders_raw")
@@ -380,6 +370,14 @@ def orders_silver():
         .join(products_lookup, "product_id", "left")
         .join(stores_lookup, "store_id", "left")
         .withColumn("calculated_amount", round(col("quantity") * coalesce(col("product_retail_price"), lit(0.0)), 2))
+        # Total amount aligned with product retail price when available, fallback to input total_amount
+        .withColumn(
+            "total_amount",
+            when(
+                coalesce(col("product_retail_price"), lit(0.0)) > 0,
+                round(col("quantity") * col("product_retail_price"), 2)
+            ).otherwise(coalesce(round(col("total_amount"), 2), round(col("calculated_amount"), 2)))
+        )
         .withColumn("total_cost", round(col("quantity") * coalesce(col("product_cost"), lit(0.0)), 2))
         .withColumn(
             "gross_profit",
@@ -388,12 +386,8 @@ def orders_silver():
         .withColumn(
             "profit_margin_pct",
             when(
-                (col("quantity") * coalesce(col("product_retail_price"), lit(0.0))) > 0,
-                round(
-                    ((col("quantity") * (coalesce(col("product_retail_price"), lit(0.0)) - coalesce(col("product_cost"), lit(0.0))))
-                     / (col("quantity") * col("product_retail_price"))) * 100,
-                    2
-                )
+                col("total_amount") > 0,
+                round((col("gross_profit") / col("total_amount")) * 100, 2)
             ).otherwise(lit(0.0))
         )
         .select(*UNIFIED_SALES_COLUMNS)
@@ -407,7 +401,6 @@ def orders_silver():
 )
 @dp.expect_all_or_drop(expectations.get("inventory", {}))
 def inventory_silver():
-    # Uses spark.read.table() to take a batch snapshot of the Silver tables for the stream-static join
     products_lookup = (
         spark.read.table("products_scd")
         .filter(col("__END_AT").isNull())

@@ -45,7 +45,7 @@ class TestSchemaUnification(unittest.TestCase):
 
     def test_unified_columns_in_silver_source(self):
         silver_path = Path(__file__).parent.parent / "src" / "maven_market_etl" / "02_silver_transformations.py"
-        content = silver_path.read_text()
+        content = silver_path.read_text(encoding="utf-8")
 
         expected_cols = [
             "order_id",
@@ -58,6 +58,7 @@ class TestSchemaUnification(unittest.TestCase):
             "store_id",
             "store_name",
             "region_id",
+            "data_region",
             "product_name",
             "product_brand",
             "quantity",
@@ -78,16 +79,22 @@ class TestSchemaUnification(unittest.TestCase):
         self.assertIn("transactions_silver", content)
         self.assertIn("orders_silver", content)
         self.assertIn("UNIFIED_SALES_COLUMNS", content)
+        self.assertIn("week_of_year", content)
+        self.assertIn("data_region", content)
 
     def test_gold_layer_unification(self):
         gold_path = Path(__file__).parent.parent / "src" / "maven_market_etl" / "03_gold_aggregates.py"
-        content = gold_path.read_text()
+        content = gold_path.read_text(encoding="utf-8")
 
         self.assertIn("gold_fact_sales", content)
         self.assertIn("tx.unionByName(orders)", content)
         self.assertIn("gold_fact_orders", content)
         self.assertIn('"source_channel"', content)
         self.assertIn('"order_id"', content)
+        self.assertIn('"data_region"', content)
+        self.assertIn('"week_of_year"', content)
+        self.assertIn("yearly_income", content)
+        self.assertIn("yearly_income_bracket", content)
 
 
 if __name__ == "__main__":

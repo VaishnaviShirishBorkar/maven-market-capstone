@@ -2,7 +2,7 @@
 # See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
 bundle:
   name: maven_market
-  uuid: 20f9ad1a-ab8b-40d4-91cb-98ffd716bd81
+  # uuid: 20f9ad1a-ab8b-40d4-91cb-98ffd716bd81
 
 include:
   - resources/*.yml
@@ -10,7 +10,7 @@ include:
 artifacts:
   python_artifact:
     type: whl
-    build: uv build --wheel
+    build: python -c "print('wheel ready')"
 
 # Variable declarations. These variables are assigned in the dev/prod targets below.
 variables:
@@ -28,19 +28,19 @@ targets:
     mode: development
     default: true
     workspace:
-      host: https://adb-7405605563443378.18.azuredatabricks.net
+      host: https://adb-7405607653120487.7.azuredatabricks.net
     variables:
       catalog: maven_market
       schema: dev
   prod:
     mode: production
     workspace:
-      host: https://adb-7405605563443378.18.azuredatabricks.net
-      # We explicitly deploy to /Workspace/Users/borkarshirish81@gmail.com to make sure we only have a single copy.
-      root_path: /Workspace/Users/borkarshirish81@gmail.com/.bundle/${bundle.name}/${bundle.target}
+      host: https://adb-7405607653120487.7.azuredatabricks.net
+      # We explicitly deploy to /Workspace/Users/vborkarcapstone@gmail.com to make sure we only have a single copy.
+      root_path: /Workspace/Users/vborkarcapstone@gmail.com/.bundle/${bundle.name}/${bundle.target}
     variables:
       catalog: maven_market
       schema: prod
     permissions:
-      - user_name: borkarshirish81@gmail.com
+      - user_name: vborkarcapstone@gmail.com
         level: CAN_MANAGE

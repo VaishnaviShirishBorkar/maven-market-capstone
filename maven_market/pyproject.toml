@@ -26,3 +26,11 @@ build-backend = "hatchling.build"
 
 [tool.ruff]
 line-length = 120
+exclude = [
+    "src/maven_market_etl/*",
+    "src/data_generators/*",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]

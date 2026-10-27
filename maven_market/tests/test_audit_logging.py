@@ -9,6 +9,37 @@ src_dir = str(Path(__file__).parent.parent / "src")
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
+# Mock pyspark if not installed in current runner environment
+try:
+    import pyspark  # noqa: F401
+except ImportError:
+    mock_pyspark = MagicMock()
+    mock_types = MagicMock()
+
+    class MockStructField:
+        def __init__(self, name, dataType=None, nullable=True):
+            self.name = name
+            self.dataType = dataType
+            self.nullable = nullable
+
+    class MockStructType:
+        def __init__(self, fields=None):
+            self.fields = fields or []
+
+    mock_types.StructField = MockStructField
+    mock_types.StructType = MockStructType
+    mock_types.StringType = MagicMock()
+    mock_types.TimestampType = MagicMock()
+    mock_types.LongType = MagicMock()
+    mock_types.DoubleType = MagicMock()
+
+    mock_pyspark.sql.types = mock_types
+    mock_pyspark.sql.SparkSession = MagicMock()
+
+    sys.modules["pyspark"] = mock_pyspark
+    sys.modules["pyspark.sql"] = mock_pyspark.sql
+    sys.modules["pyspark.sql.types"] = mock_types
+
 from maven_market.logging.telemetry import AUDIT_SCHEMA, emit_audit_event  # noqa: E402
 
 

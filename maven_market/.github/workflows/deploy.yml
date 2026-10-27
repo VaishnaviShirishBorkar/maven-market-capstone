@@ -111,6 +111,10 @@ jobs:
         run: |
           databricks bundle deploy -t prod
 
-      - name: Run Pipeline in Production
+      - name: Deploy Databricks Asset Bundle (Dev)
         run: |
-          databricks bundle run -t prod maven_market_job --refresh-all
+          databricks bundle deploy -t dev
+
+      - name: Run Already Deployed Pipeline & Job
+        run: |
+          databricks bundle run -t dev maven_market_job

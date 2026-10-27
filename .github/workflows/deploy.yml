@@ -9,6 +9,7 @@ on:
     branches:
       - main
       - dev
+  workflow_dispatch:
 
 defaults:
   run:
@@ -54,6 +55,17 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build Python Wheel
+        run: |
+          python -m pip install --upgrade pip
+          pip install hatchling build
+          python -m build --wheel
+
       - name: Setup Databricks CLI
         uses: databricks/setup-cli@main
 
@@ -68,7 +80,7 @@ jobs:
   bundle_deploy_prod:
     name: Deploy to Production
     needs: lint_and_test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: (github.ref == 'refs/heads/main' && github.event_name == 'push') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -76,6 +88,17 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build Python Wheel
+        run: |
+          python -m pip install --upgrade pip
+          pip install hatchling build
+          python -m build --wheel
 
       - name: Setup Databricks CLI
         uses: databricks/setup-cli@main

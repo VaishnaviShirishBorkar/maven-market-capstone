@@ -295,8 +295,6 @@ def gold_fact_returns():
     table_properties={"quality": "gold"}
 )
 def gold_fact_orders():
-    # Read the Silver streaming table as a stream so new Kafka orders flow through
-    # to Gold incrementally rather than waiting for a batch refresh.
     orders = spark.read.table(f"{SILVER_SCHEMA}.orders_silver")
 
     return orders.select(

@@ -238,7 +238,7 @@ def gold_dim_calendar():
     table_properties={"quality": "gold"}
 )
 def gold_fact_sales():
-    tx = spark.read.table(f"{SILVER_SCHEMA}.transactions_silver")
+    tx = spark.readStream.table(f"{SILVER_SCHEMA}.transactions_silver")
     orders = spark.read.table(f"{SILVER_SCHEMA}.orders_silver")
 
     # Combine historical POS transactions and real-time Kafka orders

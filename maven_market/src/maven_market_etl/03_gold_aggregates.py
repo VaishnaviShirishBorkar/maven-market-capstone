@@ -295,6 +295,8 @@ def gold_fact_returns():
     table_properties={"quality": "gold"}
 )
 def gold_fact_orders():
+    # Read the Silver streaming table as a stream so new Kafka orders flow through
+    # to Gold incrementally rather than waiting for a batch refresh.
     orders = spark.read.table(f"{SILVER_SCHEMA}.orders_silver")
 
     return orders.select(
@@ -302,6 +304,7 @@ def gold_fact_orders():
         "order_timestamp",
         "order_date",
         col("order_date").alias("sales_date"),
+        # Dashboard can group order_timestamp by minute for order-volume KPIs.
         "product_id",
         "customer_id",
         "store_id",
@@ -330,6 +333,8 @@ def gold_fact_orders():
     table_properties={"quality": "gold"}
 )
 def gold_fact_inventory():
+    # Deduplicate historical observations: take the latest stock snapshot per store and product
+    # so dashboard sum/count metrics reflect CURRENT inventory rather than inflating over time.
     from pyspark.sql.window import Window
     from pyspark.sql.functions import row_number
 

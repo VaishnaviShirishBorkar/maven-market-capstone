@@ -85,15 +85,10 @@ class TestDaBsConfiguration(unittest.TestCase):
         config = self._load_databricks_yml()
         include_block = config.get("include", [])
         self.assertTrue(any("resources" in str(inc) for inc in include_block), "resources directory must be in include block")
-
         # Verify pipeline resources and job definition exist
         res_dir = ROOT / "resources"
-        
         # Support either the single consolidated pipeline file or the 3 separate files
-        has_pipelines = (
-            (res_dir / "all_pipelines.yml").exists() or 
-            (res_dir / "01_bronze.pipeline.yml").exists()
-        )
+        has_pipelines = ((res_dir / "all_pipelines.yml").exists() or (res_dir / "01_bronze.pipeline.yml").exists())
         self.assertTrue(has_pipelines, "Pipeline resource YAML file(s) missing from resources/")
         self.assertTrue((res_dir / "sample_job.job.yml").exists(), "sample_job.job.yml missing")
 

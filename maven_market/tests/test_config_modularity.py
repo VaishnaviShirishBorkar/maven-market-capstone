@@ -18,8 +18,6 @@ except ImportError:
 
 ROOT = Path(__file__).parent.parent
 SRC = ROOT / "src" / "maven_market_etl"
-
-
 class TestConfigModularity(unittest.TestCase):
     """Ensures config.yml covers all required entities and is complete."""
 
@@ -81,22 +79,20 @@ class TestConfigModularity(unittest.TestCase):
                 f"No expectation rules defined for entity: {entity}"
             )
 
-    def test_transactions_and_orders_have_same_core_expectations(self):
+   def test_transactions_and_orders_have_same_core_expectations(self):
         """Transactions and Orders must have identical quality rules to ensure schema unification."""
         config = self._load_config()
         exp = config.get("expectations", {})
         tx = exp.get("transactions", {})
         orders = exp.get("orders", {})
-        
         # Flatten the nested category dictionaries (drop, warn, fail) for testing
         tx_flat = {k: v for category in tx.values() for k, v in category.items()} if tx else {}
         orders_flat = {k: v for category in orders.values() for k, v in category.items()} if orders else {}
-        
-        shared_keys = ["valid_order_id", "valid_quantity", "valid_product_id", "valid_store_id", "valid_total_amount"]
+        shared_keys = ["valid_order_id", "valid_quantity", "valid_product_id","valid_store_id", "valid_total_amount"]
         for key in shared_keys:
             self.assertIn(key, tx_flat, f"transactions.{key} expectation missing")
             self.assertIn(key, orders_flat, f"orders.{key} expectation missing")
-            self.assertEqual(tx_flat[key], orders_flat[key], f"Expectation mismatch between transactions and orders for '{key}'")
+            self.assertEqual(tx_flat[key], orders_flat[key],f"Expectation mismatch between transactions and orders for '{key}'")
 
 
 class TestNoHardcodedValues(unittest.TestCase):
@@ -327,7 +323,5 @@ class TestGoldLayerGovernanceTags(unittest.TestCase):
             len(set_tags_blocks), 0,
             f"owner_team structural tag must only be on Gold, but found it applied to Bronze/Silver: {set_tags_blocks}"
         )
-
-
 if __name__ == "__main__":
     unittest.main()

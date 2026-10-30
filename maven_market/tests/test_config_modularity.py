@@ -79,7 +79,7 @@ class TestConfigModularity(unittest.TestCase):
                 f"No expectation rules defined for entity: {entity}"
             )
 
-   def test_transactions_and_orders_have_same_core_expectations(self):
+    def test_transactions_and_orders_have_same_core_expectations(self):
         """Transactions and Orders must have identical quality rules to ensure schema unification."""
         config = self._load_config()
         exp = config.get("expectations", {})

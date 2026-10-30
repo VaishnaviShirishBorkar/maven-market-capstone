@@ -5,6 +5,32 @@ from pathlib import Path
 
 
 class TestSchemaUnification(unittest.TestCase):
+    # def test_config_expectations_aligned(self):
+    #     config_path = Path(__file__).parent.parent / "configs" / "config.yml"
+    #     with open(config_path, "r") as f:
+    #         config = yaml.safe_load(f)
+
+    #     exp = config.get("expectations", {})
+    #     tx_exp = exp.get("transactions", {})
+    #     order_exp = exp.get("orders", {})
+
+    #     self.assertIn("valid_order_id", tx_exp)
+    #     self.assertIn("valid_order_id", order_exp)
+    #     self.assertEqual(tx_exp["valid_order_id"], "order_id IS NOT NULL")
+    #     self.assertEqual(order_exp["valid_order_id"], "order_id IS NOT NULL")
+
+    #     self.assertEqual(tx_exp["valid_quantity"], "quantity > 0")
+    #     self.assertEqual(order_exp["valid_quantity"], "quantity > 0")
+
+    #     self.assertEqual(tx_exp["valid_total_amount"], "total_amount >= 0")
+    #     self.assertEqual(order_exp["valid_total_amount"], "total_amount >= 0")
+
+    #     self.assertEqual(tx_exp["valid_product_id"], "product_id IS NOT NULL")
+    #     self.assertEqual(order_exp["valid_product_id"], "product_id IS NOT NULL")
+
+    #     self.assertEqual(tx_exp["valid_store_id"], "store_id IS NOT NULL")
+    #     self.assertEqual(order_exp["valid_store_id"], "store_id IS NOT NULL")
+
     def test_config_expectations_aligned(self):
         config_path = Path(__file__).parent.parent / "configs" / "config.yml"
         with open(config_path, "r") as f:
@@ -14,22 +40,22 @@ class TestSchemaUnification(unittest.TestCase):
         tx_exp = exp.get("transactions", {})
         order_exp = exp.get("orders", {})
 
-        self.assertIn("valid_order_id", tx_exp)
-        self.assertIn("valid_order_id", order_exp)
-        self.assertEqual(tx_exp["valid_order_id"], "order_id IS NOT NULL")
-        self.assertEqual(order_exp["valid_order_id"], "order_id IS NOT NULL")
+        # Flatten the nested category dictionaries
+        tx_flat = {k: v for category in tx_exp.values() for k, v in category.items()} if tx_exp else {}
+        order_flat = {k: v for category in order_exp.values() for k, v in category.items()} if order_exp else {}
 
-        self.assertEqual(tx_exp["valid_quantity"], "quantity > 0")
-        self.assertEqual(order_exp["valid_quantity"], "quantity > 0")
-
-        self.assertEqual(tx_exp["valid_total_amount"], "total_amount >= 0")
-        self.assertEqual(order_exp["valid_total_amount"], "total_amount >= 0")
-
-        self.assertEqual(tx_exp["valid_product_id"], "product_id IS NOT NULL")
-        self.assertEqual(order_exp["valid_product_id"], "product_id IS NOT NULL")
-
-        self.assertEqual(tx_exp["valid_store_id"], "store_id IS NOT NULL")
-        self.assertEqual(order_exp["valid_store_id"], "store_id IS NOT NULL")
+        self.assertIn("valid_order_id", tx_flat)
+        self.assertIn("valid_order_id", order_flat)
+        self.assertEqual(tx_flat["valid_order_id"], "order_id IS NOT NULL")
+        self.assertEqual(order_flat["valid_order_id"], "order_id IS NOT NULL")
+        self.assertEqual(tx_flat["valid_quantity"], "quantity > 0")
+        self.assertEqual(order_flat["valid_quantity"], "quantity > 0")
+        self.assertEqual(tx_flat["valid_total_amount"], "total_amount >= 0")
+        self.assertEqual(order_flat["valid_total_amount"], "total_amount >= 0")
+        self.assertEqual(tx_flat["valid_product_id"], "product_id IS NOT NULL")
+        self.assertEqual(order_flat["valid_product_id"], "product_id IS NOT NULL")
+        self.assertEqual(tx_flat["valid_store_id"], "store_id IS NOT NULL")
+        self.assertEqual(order_flat["valid_store_id"], "store_id IS NOT NULL")
 
     def test_deterministic_order_id_generation(self):
         # Simulates: concat(lit("TXN_"), upper(substring(sha2(concat_ws("_", ...), 256), 1, 8)))

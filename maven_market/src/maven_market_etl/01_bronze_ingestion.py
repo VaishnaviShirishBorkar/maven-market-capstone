@@ -13,9 +13,6 @@ from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType, LongType, DoubleType
 )
 
-# ==========================================
-# 0. Path Resolution & Custom Logger Import
-# ==========================================
 curr_dir = os.getcwd()
 for _ in range(5):
     if os.path.exists(os.path.join(curr_dir, "maven_market")):

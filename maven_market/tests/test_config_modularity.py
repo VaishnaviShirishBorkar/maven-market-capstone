@@ -16,11 +16,8 @@ try:
 except ImportError:
     yaml = None
 
-
 ROOT = Path(__file__).parent.parent
 SRC = ROOT / "src" / "maven_market_etl"
-
-
 class TestConfigModularity(unittest.TestCase):
     """Ensures config.yml covers all required entities and is complete."""
 
@@ -88,13 +85,14 @@ class TestConfigModularity(unittest.TestCase):
         exp = config.get("expectations", {})
         tx = exp.get("transactions", {})
         orders = exp.get("orders", {})
-        shared_keys = ["valid_order_id", "valid_quantity", "valid_product_id",
-                       "valid_store_id", "valid_total_amount"]
+        # Flatten the nested category dictionaries (drop, warn, fail) for testing
+        tx_flat = {k: v for category in tx.values() for k, v in category.items()} if tx else {}
+        orders_flat = {k: v for category in orders.values() for k, v in category.items()} if orders else {}
+        shared_keys = ["valid_order_id", "valid_quantity", "valid_product_id","valid_store_id", "valid_total_amount"]
         for key in shared_keys:
-            self.assertIn(key, tx, f"transactions.{key} expectation missing")
-            self.assertIn(key, orders, f"orders.{key} expectation missing")
-            self.assertEqual(tx[key], orders[key],
-                             f"Expectation mismatch between transactions and orders for '{key}'")
+            self.assertIn(key, tx_flat, f"transactions.{key} expectation missing")
+            self.assertIn(key, orders_flat, f"orders.{key} expectation missing")
+            self.assertEqual(tx_flat[key], orders_flat[key],f"Expectation mismatch between transactions and orders for '{key}'")
 
 
 class TestNoHardcodedValues(unittest.TestCase):
@@ -325,7 +323,5 @@ class TestGoldLayerGovernanceTags(unittest.TestCase):
             len(set_tags_blocks), 0,
             f"owner_team structural tag must only be on Gold, but found it applied to Bronze/Silver: {set_tags_blocks}"
         )
-
-
 if __name__ == "__main__":
     unittest.main()

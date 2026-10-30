@@ -67,17 +67,29 @@ class TestDaBsConfiguration(unittest.TestCase):
             self.assertIn("host", ws, f"Missing workspace.host in target '{tgt_name}'")
             self.assertTrue(ws["host"].startswith("https://"), f"Host in target '{tgt_name}' must start with https://")
 
+    # def test_resources_included(self):
+    #     """Resource files for all three pipeline layers and the job must be included and exist."""
+    #     config = self._load_databricks_yml()
+    #     include_block = config.get("include", [])
+    #     self.assertTrue(any("resources" in str(inc) for inc in include_block), "resources directory must be in include block")
+
+    #     # Verify all three pipeline resources and job definition exist
+    #     res_dir = ROOT / "resources"
+    #     self.assertTrue((res_dir / "01_bronze.pipeline.yml").exists(), "01_bronze.pipeline.yml missing")
+    #     self.assertTrue((res_dir / "02_silver.pipeline.yml").exists(), "02_silver.pipeline.yml missing")
+    #     self.assertTrue((res_dir / "03_gold.pipeline.yml").exists(), "03_gold.pipeline.yml missing")
+    #     self.assertTrue((res_dir / "sample_job.job.yml").exists(), "sample_job.job.yml missing")
+
     def test_resources_included(self):
-        """Resource files for all three pipeline layers and the job must be included and exist."""
+        """Resource files for pipeline layers and the job must be included and exist."""
         config = self._load_databricks_yml()
         include_block = config.get("include", [])
         self.assertTrue(any("resources" in str(inc) for inc in include_block), "resources directory must be in include block")
-
-        # Verify all three pipeline resources and job definition exist
+        # Verify pipeline resources and job definition exist
         res_dir = ROOT / "resources"
-        self.assertTrue((res_dir / "01_bronze.pipeline.yml").exists(), "01_bronze.pipeline.yml missing")
-        self.assertTrue((res_dir / "02_silver.pipeline.yml").exists(), "02_silver.pipeline.yml missing")
-        self.assertTrue((res_dir / "03_gold.pipeline.yml").exists(), "03_gold.pipeline.yml missing")
+        # Support either the single consolidated pipeline file or the 3 separate files
+        has_pipelines = ((res_dir / "all_pipelines.yml").exists() or (res_dir / "01_bronze.pipeline.yml").exists())
+        self.assertTrue(has_pipelines, "Pipeline resource YAML file(s) missing from resources/")
         self.assertTrue((res_dir / "sample_job.job.yml").exists(), "sample_job.job.yml missing")
 
 

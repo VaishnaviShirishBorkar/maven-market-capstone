@@ -238,7 +238,7 @@ def gold_dim_calendar():
     table_properties={"quality": "gold"}
 )
 def gold_fact_sales():
-    tx = spark.readStream.table(f"{SILVER_SCHEMA}.transactions_silver")
+    tx = spark.read.table(f"{SILVER_SCHEMA}.transactions_silver")
     orders = spark.read.table(f"{SILVER_SCHEMA}.orders_silver")
 
     # Combine historical POS transactions and real-time Kafka orders
@@ -295,6 +295,8 @@ def gold_fact_returns():
     table_properties={"quality": "gold"}
 )
 def gold_fact_orders():
+    # Read the Silver streaming table as a stream so new Kafka orders flow through
+    # to Gold incrementally rather than waiting for a batch refresh.
     orders = spark.read.table(f"{SILVER_SCHEMA}.orders_silver")
 
     return orders.select(

@@ -74,7 +74,9 @@ expectations = config.get("expectations", {})
     comment="Cleansed calendar streaming dimension table",
     table_properties={"quality": "silver"}
 )
-@dp.expect_all_or_drop(expectations.get("calendar", {}))
+@dp.expect_all(expectations.get("calendar", {}).get("warn", {}))
+@dp.expect_all_or_drop(expectations.get("calendar", {}).get("drop", {}))
+@dp.expect_all_or_fail(expectations.get("calendar", {}).get("fail", {}))
 def calendar_silver():
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.calendar_raw")
@@ -98,7 +100,9 @@ def calendar_silver():
     comment="Cleansed sales regions master streaming dimension table",
     table_properties={"quality": "silver"}
 )
-@dp.expect_all_or_drop(expectations.get("regions", {}))
+@dp.expect_all(expectations.get("regions", {}).get("warn", {}))
+@dp.expect_all_or_drop(expectations.get("regions", {}).get("drop", {}))
+@dp.expect_all_or_fail(expectations.get("regions", {}).get("fail", {}))
 def regions_silver():
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.regions_raw")
@@ -114,7 +118,9 @@ def regions_silver():
     comment="Cleansed store streaming dimension table with ABAC data_region taxonomy",
     table_properties={"quality": "silver"}
 )
-@dp.expect_all_or_drop(expectations.get("stores", {}))
+@dp.expect_all(expectations.get("stores", {}).get("warn", {}))
+@dp.expect_all_or_drop(expectations.get("stores", {}).get("drop", {}))
+@dp.expect_all_or_fail(expectations.get("stores", {}).get("fail", {}))
 def stores_silver():
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.stores_raw")
@@ -224,7 +230,9 @@ UNIFIED_SALES_COLUMNS = [
     comment="Cleansed point-of-sale transaction streaming fact table enriched with order_id and product metadata",
     table_properties={"quality": "silver"}
 )
-@dp.expect_all_or_drop(expectations.get("transactions", {}))
+@dp.expect_all(expectations.get("transactions", {}).get("warn", {}))
+@dp.expect_all_or_drop(expectations.get("transactions", {}).get("drop", {}))
+@dp.expect_all_or_fail(expectations.get("transactions", {}).get("fail", {}))
 def transactions_silver():
     products_lookup = (
         spark.read.table("products_scd")
@@ -240,7 +248,6 @@ def transactions_silver():
     )
     stores_lookup = spark.read.table("stores_silver").select("store_id", "store_name", "region_id", "data_region")
 
-    # Read POS CSV stream and compute standardized dates and synthetic deterministic order_id
     raw_tx = (
         spark.readStream.table(f"{BRONZE_SCHEMA}.transactions_raw")
         .withColumn("store_id", col("store_id").cast("integer"))
@@ -259,7 +266,6 @@ def transactions_silver():
         ))
         .withColumn("order_timestamp", to_timestamp(col("order_date")))
         .withColumn("source_channel", lit("POS"))
-        # Deterministic order_id: TXN_ + first 8 uppercase hex characters of row content SHA-256 hash
         .withColumn(
             "order_id",
             concat(
@@ -313,7 +319,9 @@ def transactions_silver():
     comment="Cleansed product return streaming fact table",
     table_properties={"quality": "silver"}
 )
-@dp.expect_all_or_drop(expectations.get("returns", {}))
+@dp.expect_all(expectations.get("returns", {}).get("warn", {}))
+@dp.expect_all_or_drop(expectations.get("returns", {}).get("drop", {}))
+@dp.expect_all_or_fail(expectations.get("returns", {}).get("fail", {}))
 def returns_silver():
     return (
         spark.readStream.table(f"{BRONZE_SCHEMA}.returns_raw")
@@ -329,7 +337,9 @@ def returns_silver():
     comment="Real-time Kafka orders streaming fact table enriched with dimension metadata",
     table_properties={"quality": "silver"}
 )
-@dp.expect_all_or_drop(expectations.get("orders", {}))
+@dp.expect_all(expectations.get("orders", {}).get("warn", {}))
+@dp.expect_all_or_drop(expectations.get("orders", {}).get("drop", {}))
+@dp.expect_all_or_fail(expectations.get("orders", {}).get("fail", {}))
 def orders_silver():
     products_lookup = (
         spark.read.table("products_scd")
@@ -370,7 +380,6 @@ def orders_silver():
         .join(products_lookup, "product_id", "left")
         .join(stores_lookup, "store_id", "left")
         .withColumn("calculated_amount", round(col("quantity") * coalesce(col("product_retail_price"), lit(0.0)), 2))
-        # Total amount aligned with product retail price when available, fallback to input total_amount
         .withColumn(
             "total_amount",
             when(
@@ -399,7 +408,9 @@ def orders_silver():
     comment="Real-time Kafka inventory streaming snapshot table enriched with dimension metadata",
     table_properties={"quality": "silver"}
 )
-@dp.expect_all_or_drop(expectations.get("inventory", {}))
+@dp.expect_all(expectations.get("inventory", {}).get("warn", {}))
+@dp.expect_all_or_drop(expectations.get("inventory", {}).get("drop", {}))
+@dp.expect_all_or_fail(expectations.get("inventory", {}).get("fail", {}))
 def inventory_silver():
     products_lookup = (
         spark.read.table("products_scd")

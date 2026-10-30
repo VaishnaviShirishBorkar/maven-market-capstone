@@ -46,7 +46,7 @@ jobs:
   bundle_deploy_dev:
     name: Deploy to Dev
     needs: lint_and_test
-    if: github.ref == 'refs/heads/dev' || github.event_name == 'pull_request'
+    if: github.ref == 'refs/heads/dev' || (github.event_name == 'pull_request' && github.base_ref == 'dev')
     runs-on: ubuntu-latest
     environment: dev
     env:

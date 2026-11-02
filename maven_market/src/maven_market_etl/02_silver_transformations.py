@@ -104,13 +104,15 @@ def _build_violation_filter(entity: str):
     if not all_rules:
         return lit(False), lit("")
 
-    violation_conditions = [~expr(sql_expr) for sql_expr in all_rules.values()]
+    # Using 'IS NOT TRUE' ensures both explicit violations (e.g. quantity <= 0)
+    # AND null violations (e.g. quantity IS NULL) evaluate to True
+    violation_conditions = [expr(f"({sql_expr}) IS NOT TRUE") for sql_expr in all_rules.values()]
     combined = violation_conditions[0]
     for cond in violation_conditions[1:]:
         combined = combined | cond
 
     rule_flags = [
-        when(~expr(sql_expr), lit(rule_name)).otherwise(lit(None))
+        when(expr(f"({sql_expr}) IS NOT TRUE"), lit(rule_name)).otherwise(lit(None))
         for rule_name, sql_expr in all_rules.items()
     ]
     violated_names_col = array_join(array(*rule_flags), ", ")
@@ -121,21 +123,22 @@ def _build_violation_filter(entity: str):
 def _to_quarantine_row(df, entity: str, source_table: str):
     """
     Applies the violation filter to df and returns a DataFrame shaped to the
-    quarantine table schema.  Rows that pass all rules are excluded.
+    quarantine table schema. Rows that pass all rules are excluded.
     """
     violation_col, violated_names_col = _build_violation_filter(entity)
+    payload_col = to_json(struct([col(c) for c in df.columns]))
     return (
         df
         .withColumn("_violation", violation_col)
         .withColumn("_violated_rules", violated_names_col)
-        .filter(col("_violation"))
+        .filter(col("_violation") == True)
         .select(
             expr("uuid()").alias("quarantine_id"),
             lit(entity).alias("quarantine_entity"),
             lit(source_table).alias("quarantine_source"),
             col("_violated_rules").alias("quarantine_rules_violated"),
             current_timestamp().alias("quarantine_timestamp"),
-            to_json(struct("*")).alias("raw_payload"),
+            payload_col.alias("raw_payload"),
         )
     )
 
